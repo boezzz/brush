@@ -521,6 +521,71 @@ async fn parse_compressed_ply<T: AsyncRead + Unpin>(
     Ok(())
 }
 
+// stream animated splats by applying deformations to a base ply
+pub fn stream_animated_splats(base_splat: SplatMessage, deformations: crate::deformations::Deformations) -> impl Stream<Item = Result<SplatMessage, DeserializeError>> {
+    use crate::deformations::apply_deformation;
+
+    try_fn_stream(|emitter| async move {
+        let num_frames = deformations.num_frames;
+        let num_deformable = deformations.num_points;
+
+        let base_num_splats = base_splat.data.num_splats() as u32;
+        if num_deformable > base_num_splats {
+            return Err(DeserializeError::custom(format!(
+                "deformation count ({}) more than splat count ({})",
+                num_deformable, base_num_splats
+            )));
+        }
+
+        let _num_static = base_num_splats - num_deformable;
+
+        let base_means = &base_splat.data.means;
+        let base_rotations = base_splat
+            .data
+            .rotations
+            .as_ref()
+            .ok_or_else(|| DeserializeError::custom("ply missing rotations"))?;
+
+        let base_log_scales = base_splat
+            .data
+            .log_scales
+            .as_ref()
+            .ok_or_else(|| DeserializeError::custom("ply missing scales"))?;
+
+
+        for frame in 0..num_frames {
+            let deform = deformations.get_frame(frame).ok_or_else(|| {
+                DeserializeError::custom(format!("Failed to get deformation frame {}", frame))
+            })?;
+
+            // apply deformations
+            let (deformed_means, deformed_rotations, deformed_log_scales) = apply_deformation(base_means, base_rotations, base_log_scales, &deform);
+
+            let data = SplatData {
+                means: deformed_means,
+                rotations: Some(deformed_rotations),
+                log_scales: Some(deformed_log_scales),
+                sh_coeffs: base_splat.data.sh_coeffs.clone(),
+                raw_opacities: base_splat.data.raw_opacities.clone(),
+            };
+
+            let meta = ParseMetadata {
+                up_axis: base_splat.meta.up_axis,
+                total_splats: base_num_splats,
+                frame_count: num_frames,
+                current_frame: frame,
+                progress: (frame + 1) as f32 / num_frames as f32,
+            };
+
+            emitter.emit(SplatMessage { meta, data }).await;
+
+            tokio_wasm::task::yield_now().await;
+        }
+
+        Ok(())
+    })
+}
+
 #[cfg(all(test, feature = "export"))]
 mod tests {
     use super::*;

@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+pub mod deformations;
 #[cfg(feature = "export")]
 pub mod export;
 #[cfg(feature = "import")]
@@ -8,12 +9,11 @@ pub mod ply_gaussian;
 pub mod quant;
 
 // Re-export main functionality
+pub use deformations::{Deformations, FrameDeformation, apply_deformation, is_deformation_file};
 #[cfg(feature = "export")]
 pub use export::splat_to_ply;
 #[cfg(feature = "import")]
-pub use import::{
-    ParseMetadata, SplatData, SplatMessage, load_splat_from_ply, stream_splat_from_ply,
-};
+pub use import::{ParseMetadata, SplatData, SplatMessage, load_splat_from_ply, stream_animated_splats, stream_splat_from_ply};
 pub use ply_gaussian::PlyGaussian;
 
 // Re-export serde-ply types for compatibility

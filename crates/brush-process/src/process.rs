@@ -9,6 +9,14 @@ use brush_serde;
 
 use crate::{config::TrainStreamConfig, message::ProcessMessage, view_stream::view_stream};
 
+// both ply and a bin file exist
+fn is_viewable_source(vfs: &brush_vfs::BrushVfs) -> bool {
+    let ply_count = vfs.files_with_extension("ply").count();
+    if ply_count == 0 {return false;}
+    let viewable_count = vfs.file_paths().filter(|p| {p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "ply" | "bin"))}).count();
+    viewable_count == vfs.file_count()
+}
+
 pub fn create_process(
     source: DataSource,
     process_args: Receiver<TrainStreamConfig>,
@@ -26,14 +34,16 @@ pub fn create_process(
         }
 
         let ply_count = vfs.files_with_extension("ply").count();
+        let bin_count = vfs.files_with_extension("bin").count();
 
         log::info!(
-            "Mounted VFS with {} files. (plys: {})",
+            "Mounted VFS with {} files. (plys: {}, bins: {})",
             vfs.file_count(),
-            ply_count
+            ply_count,
+            bin_count
         );
 
-        let is_training = vfs_counts != ply_count;
+        let is_training = !is_viewable_source(&vfs);
 
         // Emit source info - just the display name
         let paths: Vec<_> = vfs.file_paths().collect();
