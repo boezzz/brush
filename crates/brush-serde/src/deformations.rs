@@ -67,7 +67,7 @@ impl Deformations {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "unsupported deformation format",
+                    "unsupported deformation format: {:?}",
                     magic
                 ),
             ));
