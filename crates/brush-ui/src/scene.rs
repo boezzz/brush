@@ -10,8 +10,9 @@ use std::sync::Arc;
 use brush_render::{
     MainBackend,
     camera::{Camera, focal_to_fov, fov_to_focal},
-    gaussian_splats::Splats,
+    gaussian_splats::{AnimatedSplats, Splats},
 };
+use std::sync::Arc as StdArc;
 use eframe::egui_wgpu::Renderer;
 use egui::{Color32, Rect, Slider};
 use glam::{UVec2, Vec3};
@@ -98,7 +99,9 @@ pub struct ScenePanel {
     #[serde(skip)]
     pub(crate) last_draw: Option<Instant>,
     #[serde(skip)]
-    view_splats: Vec<Splats<MainBackend>>,
+    view_splats: Vec<StdArc<Splats<MainBackend>>>,
+    #[serde(skip)]
+    animated_splats: Option<AnimatedSplats<MainBackend>>,
     #[serde(skip)]
     fully_loaded: bool,
     #[serde(skip)]
@@ -130,7 +133,7 @@ impl ScenePanel {
         &mut self,
         ui: &mut egui::Ui,
         process: &UiProcess,
-        splats: Option<Splats<MainBackend>>,
+        splats: Option<&Splats<MainBackend>>,
         interactive: bool,
     ) -> egui::Rect {
         let size = ui.available_size();
@@ -342,6 +345,7 @@ impl ScenePanel {
         self.last_draw = None;
         self.last_state = None;
         self.view_splats = vec![];
+        self.animated_splats = None;
         self.frame_count = 0;
         self.frame = 0.0;
         self.num_splats = 0;
@@ -616,13 +620,14 @@ impl AppPane for ScenePanel {
                     if *frame == 0 {
                         self.view_splats.clear();
                     }
+                    let arc_splats = StdArc::new(splats.as_ref().clone());
                     self.view_splats
-                        .resize(*frame as usize + 1, splats.as_ref().clone());
+                        .resize(*frame as usize + 1, arc_splats);
                 } else {
                     // Static splat - only replace when fully loaded (progress = 1.0) or if we haven't fully loaded a splat
                     // yet.
                     if done_loading || !self.fully_loaded {
-                        self.view_splats = vec![splats.as_ref().clone()];
+                        self.view_splats = vec![StdArc::new(splats.as_ref().clone())];
                     }
                 }
 
@@ -639,12 +644,39 @@ impl AppPane for ScenePanel {
                     self.last_state = None;
                 }
             }
+            ProcessMessage::ViewAnimatedSplats {
+                up_axis,
+                animated_splats,
+            } => {
+                if !process.is_training()
+                    && let Some(up_axis) = up_axis
+                {
+                    process.set_model_up(*up_axis);
+                }
+
+                self.frame_count = animated_splats.num_frames;
+                self.num_splats = animated_splats.num_splats();
+                self.sh_degree = animated_splats.sh_degree();
+
+                self.view_splats.clear();
+                self.animated_splats = Some(*animated_splats.clone());
+                self.fully_loaded = true;
+
+                log::info!(
+                    "Loaded animated splats: {} frames, {} splats",
+                    self.frame_count,
+                    self.num_splats
+                );
+
+                // Mark redraw as dirty
+                self.last_state = None;
+            }
             #[cfg(feature = "training")]
             ProcessMessage::TrainMessage(TrainMessage::TrainStep { splats, .. }) => {
                 let splats = *splats.clone();
                 self.num_splats = splats.num_splats();
                 self.sh_degree = splats.sh_degree();
-                self.view_splats = vec![splats];
+                self.view_splats = vec![StdArc::new(splats)];
                 // Mark redraw as dirty if we're live updating.
                 if process.is_live_update() {
                     self.last_state = None;
@@ -675,6 +707,7 @@ impl AppPane for ScenePanel {
         // Empty scene, nothing to show.
         if !process.is_training()
             && self.view_splats.is_empty()
+            && self.animated_splats.is_none()
             && process.ui_mode() == UiMode::Default
         {
             ui.vertical_centered(|ui| {
@@ -744,19 +777,23 @@ impl AppPane for ScenePanel {
         if !self.paused {
             self.frame += delta_time;
 
-            if self.view_splats.len() as u32 != self.frame_count {
-                let max_t = (self.view_splats.len() - 1) as f32 / FPS;
+            if self.animated_splats.is_none() && self.view_splats.len() as u32 != self.frame_count {
+                let max_t = (self.view_splats.len().saturating_sub(1)) as f32 / FPS;
                 self.frame = self.frame.min(max_t);
             }
         }
 
-        let frame = (self.frame * FPS)
-            .rem_euclid(self.frame_count as f32)
+        let frame_idx = (self.frame * FPS)
+            .rem_euclid(self.frame_count.max(1) as f32)
             .floor() as usize;
 
-        let splats = self.view_splats.get(frame).cloned();
+        let splats: Option<StdArc<Splats<MainBackend>>> = if let Some(animated) = &self.animated_splats {
+            Some(StdArc::new(animated.get_frame(frame_idx as u32)))
+        } else {
+            self.view_splats.get(frame_idx).cloned()
+        };
         let interactive = matches!(process.ui_mode(), UiMode::Default | UiMode::FullScreenSplat);
-        let rect = self.draw_splats(ui, process, splats, interactive);
+        let rect = self.draw_splats(ui, process, splats.as_deref(), interactive);
 
         if interactive {
             // Floating play/pause button if needed.

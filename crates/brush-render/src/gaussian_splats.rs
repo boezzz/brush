@@ -10,6 +10,7 @@ use burn::{
     tensor::{Tensor, TensorData, TensorPrimitive, activation::sigmoid, s},
 };
 use glam::Vec3;
+use std::sync::Arc;
 use tracing::trace_span;
 
 #[derive(Module, Debug)]
@@ -251,5 +252,195 @@ impl<B: Backend + SplatForward<B>> Splats<B> {
         #[cfg(any(feature = "debug-validation", test))]
         aux.validate_values();
         (img, aux)
+    }
+}
+
+/// animated splats that share static data across frames
+#[derive(Debug, Clone)]
+pub struct AnimatedSplats<B: Backend> {
+    pub means: Tensor<B, 3>,
+    pub rotations: Tensor<B, 3>,
+    pub log_scales: Tensor<B, 3>,
+    pub sh_coeffs: Arc<Tensor<B, 3>>,
+    pub raw_opacities: Arc<Tensor<B, 1>>,
+    pub num_frames: u32,
+}
+
+impl<B: Backend> AnimatedSplats<B> {
+    pub fn from_separated(
+        dynamic_means: Vec<f32>,
+        dynamic_rotations: Vec<f32>,
+        dynamic_log_scales: Vec<f32>,
+        static_means: Vec<f32>,
+        static_rotations: Vec<f32>,
+        static_log_scales: Vec<f32>,
+        sh_coeffs: Vec<f32>,
+        raw_opacities: Vec<f32>,
+        num_frames: u32,
+        num_deformable: usize,
+        num_static: usize,
+        device: &B::Device,
+    ) -> Self {
+        let _ = trace_span!("AnimatedSplats::from_separated").entered();
+
+        let n_frames = num_frames as usize;
+        let num_splats = num_deformable + num_static;
+
+        // build tensors directly on GPU to avoid large CPU allocations
+        let dynamic_means_tensor = Tensor::from_data(
+            TensorData::new(dynamic_means, [n_frames, num_deformable, 3]),
+            device,
+        );
+        let dynamic_rotations_tensor = Tensor::from_data(
+            TensorData::new(dynamic_rotations, [n_frames, num_deformable, 4]),
+            device,
+        );
+        let dynamic_log_scales_tensor = Tensor::from_data(
+            TensorData::new(dynamic_log_scales, [n_frames, num_deformable, 3]),
+            device,
+        );
+
+        let means = if num_static > 0 {
+            let static_means_tensor: Tensor<B, 2> = Tensor::from_data(
+                TensorData::new(static_means, [num_static, 3]),
+                device,
+            );
+            let static_means_tensor = static_means_tensor.unsqueeze_dim(0).repeat_dim(0, n_frames);
+            Tensor::cat(vec![dynamic_means_tensor, static_means_tensor], 1)
+        } else {
+            dynamic_means_tensor
+        };
+
+        let rotations = if num_static > 0 {
+            let static_rotations_tensor: Tensor<B, 2> = Tensor::from_data(
+                TensorData::new(static_rotations, [num_static, 4]),
+                device,
+            );
+            let static_rotations_tensor = static_rotations_tensor.unsqueeze_dim(0).repeat_dim(0, n_frames);
+            Tensor::cat(vec![dynamic_rotations_tensor, static_rotations_tensor], 1)
+        } else {
+            dynamic_rotations_tensor
+        };
+
+        let log_scales = if num_static > 0 {
+            let static_log_scales_tensor: Tensor<B, 2> = Tensor::from_data(
+                TensorData::new(static_log_scales, [num_static, 3]),
+                device,
+            );
+            let static_log_scales_tensor = static_log_scales_tensor.unsqueeze_dim(0).repeat_dim(0, n_frames);
+            Tensor::cat(vec![dynamic_log_scales_tensor, static_log_scales_tensor], 1)
+        } else {
+            dynamic_log_scales_tensor
+        };
+
+        let n_coeffs = sh_coeffs.len() / num_splats;
+        let sh_coeffs = Arc::new(Tensor::from_data(
+            TensorData::new(sh_coeffs, [num_splats, n_coeffs / 3, 3]),
+            device,
+        ));
+        let raw_opacities = Arc::new(Tensor::from_data(
+            TensorData::new(raw_opacities, [num_splats]),
+            device,
+        ));
+
+        Self {
+            means,
+            rotations,
+            log_scales,
+            sh_coeffs,
+            raw_opacities,
+            num_frames,
+        }
+    }
+
+    pub fn from_raw(
+        all_means: Vec<f32>,
+        all_rotations: Vec<f32>,
+        all_log_scales: Vec<f32>,
+        sh_coeffs: Vec<f32>,
+        raw_opacities: Vec<f32>,
+        num_frames: u32,
+        num_splats: usize,
+        device: &B::Device,
+    ) -> Self {
+        let _ = trace_span!("AnimatedSplats::from_raw").entered();
+
+        let n_frames = num_frames as usize;
+
+        let means = Tensor::from_data(
+            TensorData::new(all_means, [n_frames, num_splats, 3]),
+            device,
+        );
+        let rotations = Tensor::from_data(
+            TensorData::new(all_rotations, [n_frames, num_splats, 4]),
+            device,
+        );
+        let log_scales = Tensor::from_data(
+            TensorData::new(all_log_scales, [n_frames, num_splats, 3]),
+            device,
+        );
+
+        let n_coeffs = sh_coeffs.len() / num_splats;
+        let sh_coeffs = Arc::new(Tensor::from_data(
+            TensorData::new(sh_coeffs, [num_splats, n_coeffs / 3, 3]),
+            device,
+        ));
+        let raw_opacities = Arc::new(Tensor::from_data(
+            TensorData::new(raw_opacities, [num_splats]),
+            device,
+        ));
+
+        Self {
+            means,
+            rotations,
+            log_scales,
+            sh_coeffs,
+            raw_opacities,
+            num_frames,
+        }
+    }
+
+    pub fn num_splats(&self) -> u32 {
+        self.means.dims()[1] as u32
+    }
+
+    pub fn sh_degree(&self) -> u32 {
+        let [_, coeffs, _] = self.sh_coeffs.dims();
+        sh_degree_from_coeffs(coeffs as u32)
+    }
+
+    pub fn get_frame(&self, frame: u32) -> Splats<B> {
+        let frame = if self.num_frames > 0 {
+            frame.min(self.num_frames - 1) as usize
+        } else {
+            0
+        };
+
+        let num_splats = self.means.dims()[1];
+
+        let means = self
+            .means
+            .clone()
+            .slice(s![frame..frame + 1, .., ..])
+            .reshape([num_splats, 3]);
+        let rotations = self
+            .rotations
+            .clone()
+            .slice(s![frame..frame + 1, .., ..])
+            .reshape([num_splats, 4]);
+        let log_scales = self
+            .log_scales
+            .clone()
+            .slice(s![frame..frame + 1, .., ..])
+            .reshape([num_splats, 3]);
+
+        let sh_coeffs = (*self.sh_coeffs).clone();
+        let raw_opacities = (*self.raw_opacities).clone();
+
+        Splats::from_tensor_data(means, rotations, log_scales, sh_coeffs, raw_opacities)
+    }
+
+    pub fn device(&self) -> B::Device {
+        self.means.device()
     }
 }

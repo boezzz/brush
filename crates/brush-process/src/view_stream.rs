@@ -3,6 +3,7 @@ use crate::message::ProcessMessage;
 use std::{pin::pin, sync::Arc};
 
 use async_fn_stream::TryStreamEmitter;
+use brush_render::gaussian_splats::AnimatedSplats;
 use brush_serde::{self, Deformations};
 use brush_vfs::BrushVfs;
 use burn_cubecl::cubecl::Runtime;
@@ -56,30 +57,40 @@ pub(crate) async fn view_stream(
             let base_splat =
                 brush_serde::load_splat_from_ply(vfs.reader_at_path(ply_path).await?, None).await?;
 
-            log::info!(
-                "Streaming {} frames",
-                deformations.num_frames
+            let _num_splats = base_splat.data.num_splats();
+
+            let base_rotations = base_splat.data.rotations.as_ref().ok_or(anyhow::anyhow!("missing rotations"))?;
+            let base_log_scales = base_splat.data.log_scales.as_ref().ok_or(anyhow::anyhow!("missing scales"))?;
+
+            let separated = deformations.apply_all_frames_separated(&base_splat.data.means, base_rotations, base_log_scales);
+
+            let total_splats = separated.num_deformable + separated.num_static;
+            let sh_coeffs = base_splat.data.sh_coeffs.unwrap_or_else(|| vec![0.5; total_splats * 3]);
+            let raw_opacities = base_splat.data.raw_opacities.unwrap_or_else(|| vec![brush_render::gaussian_splats::inverse_sigmoid(0.5); total_splats]);
+
+            let animated_splats = AnimatedSplats::from_separated(
+                separated.dynamic_means,
+                separated.dynamic_rotations,
+                separated.dynamic_log_scales,
+                separated.static_means,
+                separated.static_rotations,
+                separated.static_log_scales,
+                sh_coeffs,
+                raw_opacities,
+                separated.num_frames,
+                separated.num_deformable,
+                separated.num_static,
+                &device,
             );
 
-            let mut anim_stream = pin!(brush_serde::stream_animated_splats(base_splat, deformations));
+            client.memory_cleanup();
 
-            while let Some(message) = anim_stream.next().await {
-                let message = message?;
-
-                let splats = message.data.into_splats(&device);
-
-                client.memory_cleanup();
-
-                emitter
-                    .emit(ProcessMessage::ViewSplats {
-                        up_axis: message.meta.up_axis,
-                        splats: Box::new(splats),
-                        frame: message.meta.current_frame,
-                        total_frames: message.meta.frame_count,
-                        progress: message.meta.progress,
-                    })
-                    .await;
-            }
+            emitter
+                .emit(ProcessMessage::ViewAnimatedSplats {
+                    up_axis: base_splat.meta.up_axis,
+                    animated_splats: Box::new(animated_splats),
+                })
+                .await;
 
             emitter.emit(ProcessMessage::DoneLoading).await;
             return Ok(());

@@ -1,2 +1,6 @@
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "opt-level=s"]
+rustflags = [
+    "-C", "opt-level=s",
+    "-C", "link-arg=--initial-memory=1073741824",  # 1GB
+    "-C", "link-arg=--max-memory=4294967296",      # 4GB
+]

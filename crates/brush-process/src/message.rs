@@ -1,5 +1,5 @@
 use brush_render::MainBackend;
-use brush_render::gaussian_splats::Splats;
+use brush_render::gaussian_splats::{AnimatedSplats, Splats};
 use brush_vfs::DataSource;
 use glam::Vec3;
 
@@ -61,6 +61,12 @@ pub enum ProcessMessage {
         frame: u32,
         total_frames: u32,
         progress: f32,
+    },
+
+    // animated splats with shared static data
+    ViewAnimatedSplats {
+        up_axis: Option<Vec3>,
+        animated_splats: Box<AnimatedSplats<MainBackend>>,
     },
 
     #[cfg(feature = "training")]

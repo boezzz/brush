@@ -23,6 +23,26 @@ pub struct Deformations {
     scales: Vec<f32>,
 }
 
+pub struct AllFrameDeformations {
+    pub all_means: Vec<f32>,
+    pub all_rotations: Vec<f32>,
+    pub all_log_scales: Vec<f32>,
+    pub num_frames: u32,
+    pub num_splats: usize,
+}
+
+pub struct SeparatedFrameDeformations {
+    pub dynamic_means: Vec<f32>,
+    pub dynamic_rotations: Vec<f32>,
+    pub dynamic_log_scales: Vec<f32>,
+    pub static_means: Vec<f32>,
+    pub static_rotations: Vec<f32>,
+    pub static_log_scales: Vec<f32>,
+    pub num_frames: u32,
+    pub num_deformable: usize,
+    pub num_static: usize,
+}
+
 impl Deformations {
     pub fn get_frame(&self, frame: u32) -> Option<FrameDeformation> {
         if frame >= self.num_frames {
@@ -131,6 +151,160 @@ impl Deformations {
         let mut data = Vec::new();
         reader.read_to_end(&mut data).await?;
         Self::from_bytes(&data)
+    }
+
+    pub fn apply_all_frames_separated(
+        &self,
+        base_means: &[f32],
+        base_rotations: &[f32],
+        base_log_scales: &[f32],
+    ) -> SeparatedFrameDeformations {
+        let total_splats = base_means.len() / 3;
+        let n_deformable = self.num_points as usize;
+        let n_static = total_splats.saturating_sub(n_deformable);
+        let num_frames = self.num_frames as usize;
+
+        // only allocate memory for dynamic gaussians
+        let mut dynamic_means = Vec::with_capacity(num_frames * n_deformable * 3);
+        let mut dynamic_rotations = Vec::with_capacity(num_frames * n_deformable * 4);
+        let mut dynamic_log_scales = Vec::with_capacity(num_frames * n_deformable * 3);
+
+        for frame in 0..num_frames {
+            let pos_start = frame * n_deformable * 3;
+            let rot_start = frame * n_deformable * 4;
+            let scale_start = frame * n_deformable * 3;
+
+            for i in 0..n_deformable {
+                let idx = pos_start + i * 3;
+                dynamic_means.push(self.positions[idx]);
+                dynamic_means.push(self.positions[idx + 1]);
+                dynamic_means.push(self.positions[idx + 2]);
+            }
+
+            for i in 0..n_deformable {
+                let idx = rot_start + i * 4;
+                dynamic_rotations.push(self.rotations[idx]);
+                dynamic_rotations.push(self.rotations[idx + 1]);
+                dynamic_rotations.push(self.rotations[idx + 2]);
+                dynamic_rotations.push(self.rotations[idx + 3]);
+            }
+
+            let n_deformable_scales = if self.has_scales { n_deformable } else { 0 };
+            for i in 0..n_deformable_scales {
+                let idx = scale_start + i * 3;
+                dynamic_log_scales.push(self.scales[idx].abs().max(1e-10).ln());
+                dynamic_log_scales.push(self.scales[idx + 1].abs().max(1e-10).ln());
+                dynamic_log_scales.push(self.scales[idx + 2].abs().max(1e-10).ln());
+            }
+        }
+
+        // static gaussians
+        let mut static_means = Vec::with_capacity(n_static * 3);
+        let mut static_rotations = Vec::with_capacity(n_static * 4);
+        let mut static_log_scales = Vec::with_capacity(n_static * 3);
+
+        for i in n_deformable..total_splats {
+            let base_idx = i * 3;
+            static_means.push(base_means[base_idx]);
+            static_means.push(base_means[base_idx + 1]);
+            static_means.push(base_means[base_idx + 2]);
+
+            let rot_idx = i * 4;
+            static_rotations.push(base_rotations[rot_idx]);
+            static_rotations.push(base_rotations[rot_idx + 1]);
+            static_rotations.push(base_rotations[rot_idx + 2]);
+            static_rotations.push(base_rotations[rot_idx + 3]);
+
+            static_log_scales.push(base_log_scales[base_idx]);
+            static_log_scales.push(base_log_scales[base_idx + 1]);
+            static_log_scales.push(base_log_scales[base_idx + 2]);
+        }
+
+        SeparatedFrameDeformations {
+            dynamic_means,
+            dynamic_rotations,
+            dynamic_log_scales,
+            static_means,
+            static_rotations,
+            static_log_scales,
+            num_frames: self.num_frames,
+            num_deformable: n_deformable,
+            num_static: n_static,
+        }
+    }
+
+    pub fn apply_all_frames(
+        &self,
+        base_means: &[f32],
+        base_rotations: &[f32],
+        base_log_scales: &[f32],
+    ) -> AllFrameDeformations {
+        let total_splats = base_means.len() / 3;
+        let n_deformable = self.num_points as usize;
+        let num_frames = self.num_frames as usize;
+
+        let mut all_means = Vec::with_capacity(num_frames * total_splats * 3);
+        let mut all_rotations = Vec::with_capacity(num_frames * total_splats * 4);
+        let mut all_log_scales = Vec::with_capacity(num_frames * total_splats * 3);
+
+        for frame in 0..num_frames {
+            let pos_start = frame * n_deformable * 3;
+            let rot_start = frame * n_deformable * 4;
+            let scale_start = frame * n_deformable * 3;
+
+            for i in 0..total_splats {
+                if i < n_deformable {
+                    let idx = pos_start + i * 3;
+                    all_means.push(self.positions[idx]);
+                    all_means.push(self.positions[idx + 1]);
+                    all_means.push(self.positions[idx + 2]);
+                } else {
+                    let base_idx = i * 3;
+                    all_means.push(base_means[base_idx]);
+                    all_means.push(base_means[base_idx + 1]);
+                    all_means.push(base_means[base_idx + 2]);
+                }
+            }
+
+            for i in 0..total_splats {
+                if i < n_deformable {
+                    let idx = rot_start + i * 4;
+                    all_rotations.push(self.rotations[idx]);
+                    all_rotations.push(self.rotations[idx + 1]);
+                    all_rotations.push(self.rotations[idx + 2]);
+                    all_rotations.push(self.rotations[idx + 3]);
+                } else {
+                    let base_idx = i * 4;
+                    all_rotations.push(base_rotations[base_idx]);
+                    all_rotations.push(base_rotations[base_idx + 1]);
+                    all_rotations.push(base_rotations[base_idx + 2]);
+                    all_rotations.push(base_rotations[base_idx + 3]);
+                }
+            }
+
+            let n_deformable_scales = if self.has_scales { n_deformable } else { 0 };
+            for i in 0..total_splats {
+                if i < n_deformable_scales {
+                    let idx = scale_start + i * 3;
+                    all_log_scales.push(self.scales[idx].abs().max(1e-10).ln());
+                    all_log_scales.push(self.scales[idx + 1].abs().max(1e-10).ln());
+                    all_log_scales.push(self.scales[idx + 2].abs().max(1e-10).ln());
+                } else {
+                    let base_idx = i * 3;
+                    all_log_scales.push(base_log_scales[base_idx]);
+                    all_log_scales.push(base_log_scales[base_idx + 1]);
+                    all_log_scales.push(base_log_scales[base_idx + 2]);
+                }
+            }
+        }
+
+        AllFrameDeformations {
+            all_means,
+            all_rotations,
+            all_log_scales,
+            num_frames: self.num_frames,
+            num_splats: total_splats,
+        }
     }
 }
 
