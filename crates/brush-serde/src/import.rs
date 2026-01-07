@@ -292,7 +292,7 @@ async fn parse_ply<T: AsyncRead + Unpin>(
             }
 
             if let Some(scales) = &mut data.log_scales {
-                scales.extend([gauss.scale_0, gauss.scale_1, gauss.scale_2]);
+                scales.extend([gauss.scale_0.exp(), gauss.scale_1.exp(), gauss.scale_2.exp()]);
             }
             if let Some(rotation) = &mut data.rotations {
                 rotation.extend([gauss.rot_0, gauss.rot_1, gauss.rot_2, gauss.rot_3]);
