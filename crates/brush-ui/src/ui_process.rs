@@ -290,6 +290,12 @@ impl UiProcess {
                 Ok(ProcessMessage::DoneLoading) => {
                     inner.is_loading = false;
                 }
+                Ok(ProcessMessage::SetCamera { camera }) => {
+                    // can manually set the camera to a certain position and rotation
+                    inner.camera = camera.clone();
+                    inner.controls.position = camera.position;
+                    inner.controls.rotation = camera.rotation;
+                }
                 _ => (),
             }
         }

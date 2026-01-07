@@ -1,4 +1,5 @@
 use brush_render::MainBackend;
+use brush_render::camera::Camera;
 use brush_render::gaussian_splats::{AnimatedSplats, Splats};
 use brush_vfs::DataSource;
 use glam::Vec3;
@@ -67,6 +68,11 @@ pub enum ProcessMessage {
     ViewAnimatedSplats {
         up_axis: Option<Vec3>,
         animated_splats: Box<AnimatedSplats<MainBackend>>,
+    },
+
+    // set the camera to a specific position and rotation when loaded
+    SetCamera {
+        camera: Camera,
     },
 
     #[cfg(feature = "training")]

@@ -33,6 +33,14 @@ Brush also works well as a splat viewer, including on the web. It can load .ply 
 
 Brush also can load .zip of splat files to display them as an animation, or a special ply that includes delta frames (see [cat-4D](https://cat-4d.github.io/) and [Cap4D](https://felixtaubner.github.io/cap4d/)!).
 
+### Explicit Deformations Format
+For explicit deformations, place these files in a folder:
+- **`.ply`** - Static Gaussian splat model
+- **`.bin`** - Deformations (DFSS format with per-frame explicit positions, rotations, scales)
+- **`.json`** (optional) - Camera positions: `[{"id": 0, "position": [x, y, z], "rotation": [[3x3 matrix]], "fx": focal_x, "fy": focal_y, "width": w, "height": h}, ...]`
+
+The viewer will automatically load to the first camera position provided.
+
 ## CLI
 Brush can be used as a CLI. Run `brush --help` to get an overview. Every CLI command can work with `--with-viewer` which also opens the UI, for easy debugging.
 

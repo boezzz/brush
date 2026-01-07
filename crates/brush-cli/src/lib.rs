@@ -175,6 +175,7 @@ pub async fn run_cli_ui(
             }
             ProcessMessage::ViewSplats { .. } => {}
             ProcessMessage::ViewAnimatedSplats { .. } => {}
+            ProcessMessage::SetCamera { .. } => {}
             #[cfg(feature = "training")]
             ProcessMessage::TrainMessage(train) => match train {
                 TrainMessage::TrainConfig { .. } => {}

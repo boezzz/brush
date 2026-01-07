@@ -4,12 +4,14 @@ use std::{pin::pin, sync::Arc};
 
 use async_fn_stream::TryStreamEmitter;
 use brush_render::gaussian_splats::AnimatedSplats;
+use brush_render::camera::Camera;
 use brush_serde::{self, Deformations};
 use brush_vfs::BrushVfs;
 use burn_cubecl::cubecl::Runtime;
 use burn_wgpu::{WgpuDevice, WgpuRuntime};
 use tokio::io::AsyncReadExt;
 use tokio_stream::StreamExt;
+use serde::Deserialize;
 
 // try to find and load deformation file for a ply
 async fn try_load_deformations(vfs: &BrushVfs) -> Option<Deformations> {
@@ -32,11 +34,68 @@ async fn try_load_deformations(vfs: &BrushVfs) -> Option<Deformations> {
     Some(deforms)
 }
 
+// import initial camera location
+#[derive(Deserialize, Debug)]
+struct CameraData {
+    #[allow(unused)]
+    id: u32,
+    #[allow(unused)]
+    img_name: String,
+    width: u32,
+    height: u32,
+    position: [f32; 3],
+    rotation: [[f32; 3]; 3],
+    fx: f64,
+    fy: f64,
+}
+
+async fn try_load_cameras(vfs: &BrushVfs) -> Option<Vec<CameraData>> {
+    let json_path = vfs.file_paths().find(|p| p.extension().is_some_and(|e| e == "json"))?;
+
+    let mut reader = vfs.reader_at_path(&json_path).await.ok()?;
+    let mut data = String::new();
+    reader.read_to_string(&mut data).await.ok()?;
+
+    let cameras: Vec<CameraData> = serde_json::from_str(&data).ok()?;
+
+    log::info!("Loaded camera file {:?}: {} cameras", json_path, cameras.len());
+
+    Some(cameras)
+}
+
+// convert rotation matrix to quaternion
+fn mat3_to_quat(m: [[f32; 3]; 3]) -> glam::Quat {
+    let mat = glam::Mat3::from_cols(
+        glam::vec3(m[0][0], m[1][0], m[2][0]),
+        glam::vec3(m[0][1], m[1][1], m[2][1]),
+        glam::vec3(m[0][2], m[1][2], m[2][2]),
+    );
+    glam::Quat::from_mat3(&mat)
+}
+
+// set up the camera
+fn camera_from_data(cam_data: &CameraData) -> Camera {
+    let position = glam::vec3(cam_data.position[0], cam_data.position[1], cam_data.position[2]);
+    let rotation = mat3_to_quat(cam_data.rotation);
+    let fov_x = brush_render::camera::focal_to_fov(cam_data.fx, cam_data.width);
+    let fov_y = brush_render::camera::focal_to_fov(cam_data.fy, cam_data.height);
+
+    Camera::new(position, rotation, fov_x, fov_y, glam::vec2(0.5, 0.5))
+}
+
 pub(crate) async fn view_stream(
     vfs: Arc<BrushVfs>,
     device: WgpuDevice,
     emitter: TryStreamEmitter<ProcessMessage, anyhow::Error>,
 ) -> anyhow::Result<()> {
+    // initilize camera first
+    if let Some(cameras) = try_load_cameras(&vfs).await {
+        if let Some(first_camera) = cameras.first() {
+            let camera = camera_from_data(first_camera);
+            emitter.emit(ProcessMessage::SetCamera { camera }).await;
+        }
+    }
+
     let mut ply_paths: Vec<_> = vfs
         .file_paths()
         .filter(|p| p.extension().is_some_and(|e| e == "ply"))

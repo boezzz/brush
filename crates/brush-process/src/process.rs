@@ -9,11 +9,11 @@ use brush_serde;
 
 use crate::{config::TrainStreamConfig, message::ProcessMessage, view_stream::view_stream};
 
-// both ply and a bin file exist
+// check if bin, ply, and json files exist
 fn is_viewable_source(vfs: &brush_vfs::BrushVfs) -> bool {
     let ply_count = vfs.files_with_extension("ply").count();
     if ply_count == 0 {return false;}
-    let viewable_count = vfs.file_paths().filter(|p| {p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "ply" | "bin"))}).count();
+    let viewable_count = vfs.file_paths().filter(|p| {p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_lowercase().as_str(), "ply" | "bin" | "json"))}).count();
     viewable_count == vfs.file_count()
 }
 
