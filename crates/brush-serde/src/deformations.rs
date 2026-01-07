@@ -31,7 +31,7 @@ pub struct AllFrameDeformations {
     pub num_splats: usize,
 }
 
-pub struct SeparatedFrameDeformations {
+pub struct SplitFrameDeformations {
     pub dynamic_means: Vec<f32>,
     pub dynamic_rotations: Vec<f32>,
     pub dynamic_log_scales: Vec<f32>,
@@ -153,12 +153,13 @@ impl Deformations {
         Self::from_bytes(&data)
     }
 
-    pub fn apply_all_frames_separated(
+    // split the deformations into dynamic and static gaussians to optimize memory usage
+    pub fn apply_all_frames_split(
         &self,
         base_means: &[f32],
         base_rotations: &[f32],
         base_log_scales: &[f32],
-    ) -> SeparatedFrameDeformations {
+    ) -> SplitFrameDeformations {
         let total_splats = base_means.len() / 3;
         let n_deformable = self.num_points as usize;
         let n_static = total_splats.saturating_sub(n_deformable);
@@ -220,7 +221,7 @@ impl Deformations {
             static_log_scales.push(base_log_scales[base_idx + 2]);
         }
 
-        SeparatedFrameDeformations {
+        SplitFrameDeformations {
             dynamic_means,
             dynamic_rotations,
             dynamic_log_scales,
@@ -234,6 +235,8 @@ impl Deformations {
     }
 }
 
+
+// not used now, used to be used for streaming
 pub fn apply_deformation(
     base_means: &[f32],
     base_rotations: &[f32],
@@ -313,63 +316,6 @@ fn apply_absolute_deformation(
 
     (deformed_means, deformed_rotations, deformed_log_scales)
 }
-
-// DFMR (delta) format is not currently supported
-// fn apply_delta_deformation(
-//     base_means: &[f32],
-//     base_rotations: &[f32],
-//     base_log_scales: &[f32],
-//     deform: &FrameDeformation,
-//     total_splats: usize,
-//     n_deformable: usize,
-// ) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-//     let mut deformed_means = Vec::with_capacity(base_means.len());
-//     for i in 0..total_splats {
-//         let base_idx = i * 3;
-//         if i < n_deformable {
-//             let delta_idx = i * 3;
-//             deformed_means.push(base_means[base_idx] + deform.positions[delta_idx]);
-//             deformed_means.push(base_means[base_idx + 1] + deform.positions[delta_idx + 1]);
-//             deformed_means.push(base_means[base_idx + 2] + deform.positions[delta_idx + 2]);
-//         } else {
-//             deformed_means.push(base_means[base_idx]);
-//             deformed_means.push(base_means[base_idx + 1]);
-//             deformed_means.push(base_means[base_idx + 2]);
-//         }
-//     }
-//
-//     let mut deformed_rotations = Vec::with_capacity(base_rotations.len());
-//     for i in 0..total_splats {
-//         let base_idx = i * 4;
-//         if i < n_deformable {
-//             let delta_idx = i * 4;
-//             let base_q = glam::Quat::from_xyzw(
-//                 base_rotations[base_idx + 1],
-//                 base_rotations[base_idx + 2],
-//                 base_rotations[base_idx + 3],
-//                 base_rotations[base_idx], // w is first in our format
-//             );
-//             let delta_q = glam::Quat::from_xyzw(
-//                 deform.rotations[delta_idx + 1],
-//                 deform.rotations[delta_idx + 2],
-//                 deform.rotations[delta_idx + 3],
-//                 deform.rotations[delta_idx], // w is first in our format
-//             );
-//             let result = (delta_q * base_q).normalize();
-//             deformed_rotations.push(result.w);
-//             deformed_rotations.push(result.x);
-//             deformed_rotations.push(result.y);
-//             deformed_rotations.push(result.z);
-//         } else {
-//             deformed_rotations.push(base_rotations[base_idx]);
-//             deformed_rotations.push(base_rotations[base_idx + 1]);
-//             deformed_rotations.push(base_rotations[base_idx + 2]);
-//             deformed_rotations.push(base_rotations[base_idx + 3]);
-//         }
-//     }
-//
-//     (deformed_means, deformed_rotations, base_log_scales.to_vec())
-// }
 
 pub fn is_deformation_file(data: &[u8]) -> bool {
     data.len() >= 4 && data.starts_with(MAGIC_DFSS)

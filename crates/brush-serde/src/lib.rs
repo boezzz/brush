@@ -9,7 +9,7 @@ pub mod ply_gaussian;
 pub mod quant;
 
 // Re-export main functionality
-pub use deformations::{AllFrameDeformations, Deformations, FrameDeformation, SeparatedFrameDeformations, apply_deformation, is_deformation_file};
+pub use deformations::{AllFrameDeformations, Deformations, FrameDeformation, SplitFrameDeformations, apply_deformation, is_deformation_file};
 #[cfg(feature = "export")]
 pub use export::splat_to_ply;
 #[cfg(feature = "import")]

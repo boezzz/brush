@@ -61,8 +61,8 @@ pub(crate) async fn view_stream(
 
             let base_rotations = base_splat.data.rotations.as_ref().ok_or(anyhow::anyhow!("missing rotations"))?;
             let base_log_scales = base_splat.data.log_scales.as_ref().ok_or(anyhow::anyhow!("missing scales"))?;
-
-            let separated = deformations.apply_all_frames_separated(&base_splat.data.means, base_rotations, base_log_scales);
+            // have sperated static and dynamics gaussians
+            let separated = deformations.apply_all_frames_split(&base_splat.data.means, base_rotations, base_log_scales);
 
             let total_splats = separated.num_deformable + separated.num_static;
             let sh_coeffs = base_splat.data.sh_coeffs.unwrap_or_else(|| vec![0.5; total_splats * 3]);
